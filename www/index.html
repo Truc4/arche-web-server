@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>arche-web-server</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main>
+    <h1>It works.</h1>
+    <p>This page is served by a static HTTP server written in
+       <strong>Arche</strong> — a data-oriented language compiled through LLVM.</p>
+    <p>Routes to try: <a href="/about.html">/about.html</a>,
+       <a href="/style.css">/style.css</a>, <a href="/app.js">/app.js</a>,
+       <a href="/nope">/nope</a> (404).</p>
+    <pre id="clock">loading clock…</pre>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
