@@ -137,7 +137,8 @@ main :: proc () {
           }
           if (fd != 0) {
             arche_fread(fd, body, 262144)(body, blen:);
-            arche_fclose(move fd);
+            // fd auto-drops (arche_fclose) at scope exit on every path — `file` has a `@drop`
+            // destructor, so no explicit close (and closing only here would be a 'some paths' error).
 
             ct := mime_by_ext(path);
             sprintf(hdr, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
