@@ -1,8 +1,8 @@
-#import { net os io }
+#import { net os io fmt str }
 
 // Handle one connection: read the request, route it, respond. Guard clauses bail early on each
 // error. `conn` is a borrow (the caller closes it once); `fd` auto-drops on every return path.
-serve :: proc(conn: socket, root: char[]) {
+serve :: proc(conn: net.socket, root: char[]) {
   // Per-connection scratch (locals: sprintf/net.recv write them in-out, so they can't be borrows;
   // sizes live only here and propagate via `.cap`).
   req: char[8192];
@@ -10,7 +10,7 @@ serve :: proc(conn: socket, root: char[]) {
   hdr: char[512];
   body: char[262144];
 
-  net.recv(conn, req, req.cap)(req, rn:);
+  net.net_recv(conn, req, req.cap)(req, rn:);
   if (rn <= 0) {
     return;
   }
@@ -53,55 +53,55 @@ serve :: proc(conn: socket, root: char[]) {
 
   // 405 — only GET/HEAD are served.
   if (!is_get && !is_head) {
-    sprintf(
+    fmt.sprintf(
       hdr,
       "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 19\r\nConnection: close\r\n\r\nMethod Not Allowed\n",
     )(hdr, _h405:);
-    net.send(conn, _, strlen(hdr))(hdr, _s405:);
+    net.net_send(conn, _, str.strlen(hdr))(hdr, _s405:);
     return;
   }
 
   // 403 — reject path traversal.
   if (has_dotdot(target)) {
-    sprintf(
+    fmt.sprintf(
       hdr,
       "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: 10\r\nConnection: close\r\n\r\nForbidden\n",
     )(hdr, _h403:);
-    net.send(conn, _, strlen(hdr))(hdr, _s403:);
+    net.net_send(conn, _, str.strlen(hdr))(hdr, _s403:);
     return;
   }
 
   // Build filesystem path; "/" maps to index.html.
   if (streq(target, "/")) {
-    sprintf(path, "%s/index.html", root)(path, _p1:);
+    fmt.sprintf(path, "%s/index.html", root)(path, _p1:);
   }
   if (!streq(target, "/")) {
-    sprintf(path, "%s%s", root, target)(path, _p2:);
+    fmt.sprintf(path, "%s%s", root, target)(path, _p2:);
   }
 
   // 404 — file missing.
-  arche_fopen_read(path)(fd:);
+  io.fopen_read(path)(fd:);
   if (!fd) {
-    sprintf(
+    fmt.sprintf(
       hdr,
       "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 10\r\nConnection: close\r\n\r\nNot Found\n",
     )(hdr, _h404:);
-    net.send(conn, _, strlen(hdr))(hdr, _s404:);
+    net.net_send(conn, _, str.strlen(hdr))(hdr, _s404:);
     return;
   }
 
   // 200 — headers, then body for GET. `fd` auto-drops (arche_fclose) at scope exit.
-  arche_fread(fd, body, body.cap)(body, blen:);
+  io.fread(fd, body, body.cap)(body, blen:);
   ct := mime_by_ext(path);
-  sprintf(
+  fmt.sprintf(
     hdr,
     "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
     ct,
     blen,
   )(hdr, _h200:);
-  net.send(conn, _, strlen(hdr))(hdr, _s200:);
+  net.net_send(conn, _, str.strlen(hdr))(hdr, _s200:);
   if (is_get == true) {
-    net.send(conn, _, blen)(body, _sb:);
+    net.net_send(conn, _, blen)(body, _sb:);
   }
 }
 
@@ -119,8 +119,8 @@ find_char :: func(s: char[], start: int, end: int, ch: int) -> int {
 
 // true if `s` (NUL-terminated) ends with `suf` (NUL-terminated).
 ends_with :: func(s: char[], suf: char[]) -> bool {
-  ls := strlen(s);
-  lf := strlen(suf);
+  ls := str.strlen(s);
+  lf := str.strlen(suf);
   if (lf > ls) {
     return false;
   }
@@ -134,7 +134,7 @@ ends_with :: func(s: char[], suf: char[]) -> bool {
 
 // true if `s` contains "..". Rejects path traversal.
 has_dotdot :: func(s: char[]) -> bool {
-  n := strlen(s);
+  n := str.strlen(s);
   for (i := 0; i < n - 1; i += 1) {
     if (s[i] != '.') {
       continue;

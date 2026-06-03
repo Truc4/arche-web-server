@@ -1,13 +1,15 @@
+#import {os net fmt server parse}
+
 main :: proc() {
-  arche_argv(1)(portstr:);
-  port := atoi(portstr);
-  arche_argv(2)(root:);
+  os.os_argv(1)(portstr:);
+  port := parse.atoi(portstr);
+  os.os_argv(2)(root:);
 
-  net.listen(port)(srv:);
-  print("arche-web-server listening\n");
+  net.net_listen(port)(srv:);
+  fmt.print("arche-web-server listening\n");
 
-  for (running := true; running;) {
-    net.accept(srv)(conn:);
-    serve(conn, root);
+  for (;;) {
+    net.net_accept(srv)(conn:);
+    server.serve(conn, root);
   }
 }
