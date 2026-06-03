@@ -1,0 +1,178 @@
+#import { net os io }
+
+// Handle one connection: read the request, route it, respond. Guard clauses bail early on each
+// error. `conn` is a borrow (the caller closes it once); `fd` auto-drops on every return path.
+serve :: proc(conn: socket, root: char[]) {
+  // Per-connection scratch (locals: sprintf/net.recv write them in-out, so they can't be borrows;
+  // sizes live only here and propagate via `.cap`).
+  req: char[8192];
+  path: char[3072];
+  hdr: char[512];
+  body: char[262144];
+
+  net.recv(conn, req, req.cap)(req, rn:);
+  if (rn <= 0) {
+    return;
+  }
+
+  // Request line: METHOD SP TARGET SP VERSION
+  sp1 := find_char(req, 0, rn, ' ');
+  sp2 := find_char(req, sp1 + 1, rn, ' ');
+
+  method: char[16];
+  mlen := sp1;
+  if (mlen > method.cap - 1) {
+    mlen = method.cap - 1;
+  }
+  mi := 0;
+  for (; mi < mlen; mi = mi + 1) {
+    method[mi] = req[mi];
+  }
+  method[mi] = 0;
+
+  // Target (strip query string at '?').
+  target: char[2048];
+  tstart := sp1 + 1;
+  tend := sp2;
+  q := find_char(req, tstart, tend, '?');
+  if (q < tend) {
+    tend = q;
+  }
+  tlen := tend - tstart;
+  if (tlen > target.cap - 1) {
+    tlen = target.cap - 1;
+  }
+  ti := 0;
+  for (; ti < tlen; ti = ti + 1) {
+    target[ti] = req[tstart + ti];
+  }
+  target[ti] = 0;
+
+  is_get := streq(method, "GET");
+  is_head := streq(method, "HEAD");
+
+  // 405 — only GET/HEAD are served.
+  if (!is_get && !is_head) {
+    sprintf(
+      hdr,
+      "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 19\r\nConnection: close\r\n\r\nMethod Not Allowed\n",
+    )(hdr, _h405:);
+    net.send(conn, _, strlen(hdr))(hdr, _s405:);
+    return;
+  }
+
+  // 403 — reject path traversal.
+  if (has_dotdot(target)) {
+    sprintf(
+      hdr,
+      "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: 10\r\nConnection: close\r\n\r\nForbidden\n",
+    )(hdr, _h403:);
+    net.send(conn, _, strlen(hdr))(hdr, _s403:);
+    return;
+  }
+
+  // Build filesystem path; "/" maps to index.html.
+  if (streq(target, "/")) {
+    sprintf(path, "%s/index.html", root)(path, _p1:);
+  }
+  if (!streq(target, "/")) {
+    sprintf(path, "%s%s", root, target)(path, _p2:);
+  }
+
+  // 404 — file missing.
+  arche_fopen_read(path)(fd:);
+  if (!fd) {
+    sprintf(
+      hdr,
+      "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 10\r\nConnection: close\r\n\r\nNot Found\n",
+    )(hdr, _h404:);
+    net.send(conn, _, strlen(hdr))(hdr, _s404:);
+    return;
+  }
+
+  // 200 — headers, then body for GET. `fd` auto-drops (arche_fclose) at scope exit.
+  arche_fread(fd, body, body.cap)(body, blen:);
+  ct := mime_by_ext(path);
+  sprintf(
+    hdr,
+    "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
+    ct,
+    blen,
+  )(hdr, _h200:);
+  net.send(conn, _, strlen(hdr))(hdr, _s200:);
+  if (is_get == true) {
+    net.send(conn, _, blen)(body, _sb:);
+  }
+}
+
+#file
+
+// First index of byte `ch` in s[start..end), or `end` if absent.
+find_char :: func(s: char[], start: int, end: int, ch: int) -> int {
+  for (i := start; i < end; i = i + 1) {
+    if (s[i] == ch) {
+      return i;
+    }
+  }
+  return end;
+}
+
+// true if `s` (NUL-terminated) ends with `suf` (NUL-terminated).
+ends_with :: func(s: char[], suf: char[]) -> bool {
+  ls := strlen(s);
+  lf := strlen(suf);
+  if (lf > ls) {
+    return false;
+  }
+  for (i := 0; i < lf; i = i + 1) {
+    if (s[ls - lf + i] != suf[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// true if `s` contains "..". Rejects path traversal.
+has_dotdot :: func(s: char[]) -> bool {
+  n := strlen(s);
+  for (i := 0; i < n - 1; i += 1) {
+    if (s[i] != '.') {
+      continue;
+    }
+    if (s[i + 1] == '.') {
+      return true;
+    }
+  }
+  return false;
+}
+
+mime_by_ext :: func(path: char[]) -> char[] {
+  if (ends_with(path, ".html")) {
+    return "text/html; charset=utf-8";
+  }
+  if (ends_with(path, ".htm")) {
+    return "text/html; charset=utf-8";
+  }
+  if (ends_with(path, ".css")) {
+    return "text/css; charset=utf-8";
+  }
+  if (ends_with(path, ".js")) {
+    return "application/javascript";
+  }
+  if (ends_with(path, ".json")) {
+    return "application/json";
+  }
+  if (ends_with(path, ".png")) {
+    return "image/png";
+  }
+  if (ends_with(path, ".jpg")) {
+    return "image/jpeg";
+  }
+  if (ends_with(path, ".svg")) {
+    return "image/svg+xml";
+  }
+  if (ends_with(path, ".txt")) {
+    return "text/plain; charset=utf-8";
+  }
+  return "application/octet-stream";
+}
