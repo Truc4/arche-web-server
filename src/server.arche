@@ -85,6 +85,16 @@ serve_file :: proc(conn: net.socket, method: char[], target: char[], root: char[
 // one C boundary, consumed by the open() syscall.
 build_path :: func(own path: char[], root: char[], target: char[]) -> char[] {
   plen := 0;
+  if (root.length == 0) {
+    // No doc-root arg → default to the bundled `www/` dir (matches `make run`). Without this an empty
+    // root makes the path absolute (`/index.html`, the FS root) → always 404.
+    def := "www";
+    di := 0;
+    for (; di < def.length; di += 1) {
+      path[plen] = def[di];
+      plen = plen + 1;
+    }
+  }
   i := 0;
   for (; i < root.length; i += 1) {
     path[plen] = root[i];

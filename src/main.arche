@@ -6,7 +6,7 @@ main :: proc() {
   if (!port) {
     port = 8000;
   }
-  os.argv(2)(root:);
+  os.argv(2)(root:); // no doc-root arg → empty; build_path then serves from the current directory
 
   server.register(); // register endpoints (router patterns → handlers) once at startup
 

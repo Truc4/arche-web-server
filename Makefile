@@ -1,7 +1,7 @@
 # arche-web-server build. Pure arche — no C, no --link (networking is a core
-# arche feature: the `socket` opaque type + `#import net`). Override the
-# compiler with ARCHE=...
-ARCHE ?= /home/curt/Code/arche/build/arche
+# arche feature: the `socket` opaque type + `#import net`). Uses the `arche`
+# compiler from PATH (install it system-wide); override with `make ARCHE=/path/to/arche`.
+ARCHE ?= arche
 SRC_DIR := src
 MAIN := $(SRC_DIR)/main.arche
 ARCHE_SRCS := $(wildcard $(SRC_DIR)/*.arche)
