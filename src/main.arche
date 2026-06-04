@@ -1,15 +1,20 @@
-#import {os net fmt server parse}
+#import { os net fmt server parse }
 
 main :: proc() {
-  os.os_argv(1)(portstr:);
+  os.argv(1)(portstr:);
   port := parse.atoi(portstr);
-  os.os_argv(2)(root:);
+  if (!port) {
+    port = 8000;
+  }
+  os.argv(2)(root:);
 
-  net.net_listen(port)(srv:);
-  fmt.print("arche-web-server listening\n");
+  server.register(); // register endpoints (router patterns → handlers) once at startup
+
+  net.listen(port)(srv:);
+  fmt.printf("arche-web-server listening on port %d\n", port);
 
   for (;;) {
-    net.net_accept(srv)(conn:);
-    server.serve(conn, root);
+    net.accept(srv)(conn:);
+    server.handle(conn, root);
   }
 }
