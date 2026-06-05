@@ -1,4 +1,8 @@
-#import { os net fmt server parse }
+// stdlib modules (os, net, fmt, parse) are devices → imported by name; `server` is this app's own
+// module → imported by path. router's TrieNode pool is owned here (the driver owns all storage).
+#import { os net fmt parse "./server" }
+
+TrieNode[256] // storage for router's radix trie (router is a device; the driver sizes its pool)
 
 main :: proc() {
   os.argv(1)(portstr:);
@@ -8,13 +12,13 @@ main :: proc() {
   }
   os.argv(2)(root:); // no doc-root arg → empty; build_path then serves from the current directory
 
-  server.register(); // register endpoints (router patterns → handlers) once at startup
+  register(); // register endpoints (router patterns → handlers) once at startup
 
   net.listen(port)(srv:);
   fmt.printf("arche-web-server listening on port %d\n", port);
 
   for (;;) {
     net.accept(srv)(conn:);
-    server.handle(conn, root);
+    handle(conn, root);
   }
 }

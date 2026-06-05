@@ -7,19 +7,19 @@
 
 // One variant per registered endpoint. `files` is the `/*` catchall (static files); a router miss
 // (-1) is remapped to it so the `match` is exhaustive with no `_` arm.
-Route :: enum { files, health }
+route :: enum { files, health }
 
 // Register the endpoints. Call once at startup, before serving. Most specific patterns win; `/*` is
 // the catchall, so anything not matched by a named route falls through to static files.
 register :: proc() {
   router.init();
-  router.add("/health", Route.health);
-  router.add("/*", Route.files);
+  router.add("/health", route.health);
+  router.add("/*", route.files);
 }
 
 // Handle ONE connection: read + parse the request, route it, dispatch to the matching handler.
 // `conn`/`fd` are opaque handles that auto-drop (close) on every return path.
-handle :: proc(conn: net.socket, root: char[]) {
+handle :: proc(conn: socket, root: char[]) {
   reqbuf: char[8192];
   hdr: char[1024];
 
@@ -39,7 +39,7 @@ handle :: proc(conn: net.socket, root: char[]) {
   // correctly seen as used (no false unused-local lint).
   router.resolve(target)(id:);
   if (id < 0) {
-    id = Route.files;
+    id = route.files;
   }
   match id {
     health: http.respond(conn, hdr, 200, "text/plain; charset=utf-8", "ok\n", 1);
@@ -50,7 +50,7 @@ handle :: proc(conn: net.socket, root: char[]) {
 #file
 
 // The `/*` handler: serve a file from `root`. GET/HEAD only; rejects `..` traversal; "/"→index.html.
-serve_file :: proc(conn: net.socket, method: char[], target: char[], root: char[]) {
+serve_file :: proc(conn: socket, method: char[], target: char[], root: char[]) {
   hdr: char[1024];
 
   is_get := streq(method, "GET");
