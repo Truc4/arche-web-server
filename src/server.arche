@@ -42,8 +42,12 @@ handle :: proc(conn: socket, root: char[]) {
     id = route.files;
   }
   match id {
-    health: http.respond(conn, hdr, 200, "text/plain; charset=utf-8", "ok\n", 1);
-    files: serve_file(conn, method, target, root);
+  route.health: {
+    http.respond(conn, hdr, 200, "text/plain; charset=utf-8", "ok\n", 1);
+  }
+  route.files: {
+    serve_file(conn, method, target, root);
+  }
   }
 }
 
@@ -80,42 +84,34 @@ serve_file :: proc(conn: socket, method: char[], target: char[], root: char[]) {
   http.respond(conn, hdr, 200, ct, content, is_get); // HEAD → headers only
 }
 
-// Assemble the filesystem path into `path` (moved in) and return the NUL-terminated VIEW. "/" maps to
-// "/index.html"; otherwise the target is appended verbatim. The NUL sits past the view's length — the
-// one C boundary, consumed by the open() syscall.
+// Assemble "<root-or-www><target-or-index>" into `path` (moved in) and return the NUL-terminated
+// VIEW. Each segment is appended by a capacity-bounded loop (`n < cap`), exactly like `str.strcopy`:
+// the writes are *proven* in range, so there is no abort, no overflow, and no failure policy needed —
+// totality by construction. (A policy like `a[i] !clamp` is the fallback only for an index the prover
+// can't bound; here we bound it, so the prover discharges it for free.) The NUL sits one past the
+// returned view — the single C boundary, consumed by the open() syscall, so we reserve a byte for it.
 build_path :: func(own path: char[], root: char[], target: char[]) -> char[] {
-  plen := 0;
+  cap := path.length - 1; // reserve the last byte for the NUL terminator
+  n := 0;
+
+  // <root>, or the bundled `www/` dir when no doc-root arg was given (matches `make run`); an empty
+  // root would otherwise make the path absolute (`/index.html`, the FS root) → always 404.
   if (root.length == 0) {
-    // No doc-root arg → default to the bundled `www/` dir (matches `make run`). Without this an empty
-    // root makes the path absolute (`/index.html`, the FS root) → always 404.
-    def := "www";
-    di := 0;
-    for (; di < def.length; di += 1) {
-      path[plen] = def[di];
-      plen = plen + 1;
-    }
+    www := "www";
+    for (i := 0; i < www.length && n < cap; i += 1) { path[n] = www[i]; n += 1; }
   }
-  i := 0;
-  for (; i < root.length; i += 1) {
-    path[plen] = root[i];
-    plen = plen + 1;
-  }
+  for (i := 0; i < root.length && n < cap; i += 1) { path[n] = root[i]; n += 1; }
+
+  // <target>: "/" maps to the directory index; any other target is appended verbatim.
   if (streq(target, "/")) {
     idx := "/index.html";
-    j := 0;
-    for (; j < idx.length; j += 1) {
-      path[plen] = idx[j];
-      plen = plen + 1;
-    }
+    for (i := 0; i < idx.length && n < cap; i += 1) { path[n] = idx[i]; n += 1; }
   }
   if (!streq(target, "/")) {
-    k := 0;
-    for (; k < target.length; k += 1) {
-      path[plen] = target[k];
-      plen = plen + 1;
-    }
+    for (i := 0; i < target.length && n < cap; i += 1) { path[n] = target[i]; n += 1; }
   }
-  path[plen] = 0;
-  out := path[0: plen];
+
+  path[n] = 0; // n <= cap = path.length-1, so the NUL is in range by construction
+  out := path[0: n];
   return out;
 }
