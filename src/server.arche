@@ -20,8 +20,8 @@ register :: proc() {
 // Handle ONE connection: read + parse the request, route it, dispatch to the matching handler.
 // `conn`/`fd` are opaque handles that auto-drop (close) on every return path.
 handle :: proc(conn: socket, root: char[]) {
-  reqbuf: char[8192];
-  hdr: char[1024];
+  reqbuf : char[8192];
+  hdr    : char[1024];
 
   net.recv(conn, reqbuf)(req:); // `req` is a VIEW of exactly the bytes received
   if (req.length <= 0) {
@@ -57,7 +57,7 @@ handle :: proc(conn: socket, root: char[]) {
 serve_file :: proc(conn: socket, method: char[], target: char[], root: char[]) {
   hdr: char[1024];
 
-  is_get := streq(method, "GET");
+  is_get  := streq(method, "GET");
   is_head := streq(method, "HEAD");
   if (!is_get && !is_head) {
     http.respond_text(conn, hdr, 405, "Method Not Allowed\n");
@@ -92,26 +92,38 @@ serve_file :: proc(conn: socket, method: char[], target: char[], root: char[]) {
 // returned view — the single C boundary, consumed by the open() syscall, so we reserve a byte for it.
 build_path :: func(own path: char[], root: char[], target: char[]) -> char[] {
   cap := path.length - 1; // reserve the last byte for the NUL terminator
-  n := 0;
+  n   := 0;
 
   // <root>, or the bundled `www/` dir when no doc-root arg was given (matches `make run`); an empty
   // root would otherwise make the path absolute (`/index.html`, the FS root) → always 404.
   if (root.length == 0) {
     www := "www";
-    for (i := 0; i < www.length && n < cap; i += 1) { path[n] = www[i]; n += 1; }
+    for (i := 0; i < www.length && n < cap; i += 1) {
+      path[n] = www[i];
+      n += 1;
+    }
   }
-  for (i := 0; i < root.length && n < cap; i += 1) { path[n] = root[i]; n += 1; }
+  for (i := 0; i < root.length && n < cap; i += 1) {
+    path[n] = root[i];
+    n += 1;
+  }
 
   // <target>: "/" maps to the directory index; any other target is appended verbatim.
   if (streq(target, "/")) {
     idx := "/index.html";
-    for (i := 0; i < idx.length && n < cap; i += 1) { path[n] = idx[i]; n += 1; }
+    for (i := 0; i < idx.length && n < cap; i += 1) {
+      path[n] = idx[i];
+      n += 1;
+    }
   }
   if (!streq(target, "/")) {
-    for (i := 0; i < target.length && n < cap; i += 1) { path[n] = target[i]; n += 1; }
+    for (i := 0; i < target.length && n < cap; i += 1) {
+      path[n] = target[i];
+      n += 1;
+    }
   }
 
   path[n] = 0; // n <= cap = path.length-1, so the NUL is in range by construction
-  out := path[0: n];
+  out     := path[0: n];
   return out;
 }

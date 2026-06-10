@@ -1,8 +1,11 @@
 // stdlib modules (os, net, fmt, parse) are devices → imported by name; `server` is this app's own
-// module → imported by path. router's TrieNode pool is owned here (the driver owns all storage).
+// module → imported by path. The router's TrieNode storage lives in `server` (the module that drives
+// the router), so this entry file owns no device pools of its own.
 #import { os net fmt parse "./server" }
 
-TrieNode[256] // storage for router's radix trie (router is a device; the driver sizes its pool)
+// Storage for the router's radix trie. `router` is a device; its datasheet states the TrieNode shape
+// and a minimum row count — the driver (this module, which owns the router usage) sizes the pool.
+TrieNode[256]
 
 main :: proc() {
   os.argv(1)(portstr:);
