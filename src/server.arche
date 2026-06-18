@@ -19,9 +19,9 @@ register :: proc() {
 
 // Handle ONE connection: read + parse the request, route it, dispatch to the matching handler.
 // `conn`/`fd` are opaque handles that auto-drop (close) on every return path.
-handle :: proc(conn: socket, root: char[]) {
-  reqbuf : char[8192];
-  hdr    : char[1024];
+handle :: proc(conn: socket, root: []char) {
+  reqbuf : [8192]char;
+  hdr    : [1024]char;
 
   net.recv(conn, reqbuf)(req:); // `req` is a VIEW of exactly the bytes received
   if (req.length <= 0) {
@@ -54,8 +54,8 @@ handle :: proc(conn: socket, root: char[]) {
 #file
 
 // The `/*` handler: serve a file from `root`. GET/HEAD only; rejects `..` traversal; "/"→index.html.
-serve_file :: proc(conn: socket, method: char[], target: char[], root: char[]) {
-  hdr: char[1024];
+serve_file :: proc(conn: socket, method: []char, target: []char, root: []char) {
+  hdr: [1024]char;
 
   is_get  := streq(method, "GET");
   is_head := streq(method, "HEAD");
@@ -69,7 +69,7 @@ serve_file :: proc(conn: socket, method: char[], target: char[], root: char[]) {
     return;
   }
 
-  path: char[3072];
+  path: [3072]char;
   pathv := build_path(move path, root, target);
 
   io.fopen_read(pathv)(fd:);
@@ -78,7 +78,7 @@ serve_file :: proc(conn: socket, method: char[], target: char[], root: char[]) {
     return;
   }
 
-  body: char[262144];
+  body: [262144]char;
   io.read(fd, body)(content:);
   ct := http.mime_by_ext(pathv);
   http.respond(conn, hdr, 200, ct, content, is_get); // HEAD → headers only
@@ -90,7 +90,7 @@ serve_file :: proc(conn: socket, method: char[], target: char[], root: char[]) {
 // totality by construction. (A policy like `a[i] !clamp` is the fallback only for an index the prover
 // can't bound; here we bound it, so the prover discharges it for free.) The NUL sits one past the
 // returned view — the single C boundary, consumed by the open() syscall, so we reserve a byte for it.
-build_path :: func(own path: char[], root: char[], target: char[]) -> char[] {
+build_path :: func(own path: []char, root: []char, target: []char) -> []char {
   cap := path.length - 1; // reserve the last byte for the NUL terminator
   n   := 0;
 
