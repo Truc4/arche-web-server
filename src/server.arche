@@ -1,29 +1,18 @@
-// The `server` module — route registration + the per-connection handler. Endpoints are registered
-// as PATTERN → Route-id in the radix router (dynamic), and dispatched id → handler via a compile-time
-// `match` (arche has no runtime function pointers, so handlers aren't a stored table — the `match` IS
-// the dispatch). Static-file serving is just the `/*` catchall handler. stdlib does the generic work
-// (`router` routing, `http` parse/respond, `str` byte ops); this module is the app policy.
 #import { router net io str http }
 
-// One variant per registered endpoint. `files` is the `/*` catchall (static files); a router miss
-// (-1) is remapped to it so the `match` is exhaustive with no `_` arm.
 route :: enum { files, health }
 
-// Register the endpoints. Call once at startup, before serving. Most specific patterns win; `/*` is
-// the catchall, so anything not matched by a named route falls through to static files.
 register :: proc() {
   router.init();
   router.add("/health", route.health);
   router.add("/*", route.files);
 }
 
-// Handle ONE connection: read + parse the request, route it, dispatch to the matching handler.
-// `conn`/`fd` are opaque handles that auto-drop (close) on every return path.
 handle :: proc(conn: socket, root: []char) {
   reqbuf : [8192]char;
   hdr    : [1024]char;
 
-  net.recv(conn, reqbuf)(req:); // `req` is a VIEW of exactly the bytes received
+  net.recv(conn, reqbuf)(req:);
   if (req.length <= 0) {
     return;
   }
@@ -34,9 +23,6 @@ handle :: proc(conn: socket, root: []char) {
     return;
   }
 
-  // Dispatch: resolve the route id, then `match` to its handler. A miss (-1) → the files catchall.
-  // `method` flows into the file handler from inside the arm — semantic analyzes match arms, so it is
-  // correctly seen as used (no false unused-local lint).
   router.resolve(target)(id:);
   if (id < 0) {
     id = route.files;
@@ -53,7 +39,6 @@ handle :: proc(conn: socket, root: []char) {
 
 #file
 
-// The `/*` handler: serve a file from `root`. GET/HEAD only; rejects `..` traversal; "/"→index.html.
 serve_file :: proc(conn: socket, method: []char, target: []char, root: []char) {
   hdr: [1024]char;
 
@@ -81,21 +66,13 @@ serve_file :: proc(conn: socket, method: []char, target: []char, root: []char) {
   body: [262144]char;
   io.read(fd, body)(content:);
   ct := http.mime_by_ext(pathv);
-  http.respond(conn, hdr, 200, ct, content, is_get); // HEAD → headers only
+  http.respond(conn, hdr, 200, ct, content, is_get);
 }
 
-// Assemble "<root-or-www><target-or-index>" into `path` (moved in) and return the NUL-terminated
-// VIEW. Each segment is appended by a capacity-bounded loop (`n < cap`), exactly like `str.strcopy`:
-// the writes are *proven* in range, so there is no abort, no overflow, and no failure policy needed —
-// totality by construction. (A policy like `a[i] !clamp` is the fallback only for an index the prover
-// can't bound; here we bound it, so the prover discharges it for free.) The NUL sits one past the
-// returned view — the single C boundary, consumed by the open() syscall, so we reserve a byte for it.
 build_path :: func(own path: []char, root: []char, target: []char) -> []char {
-  cap := path.length - 1; // reserve the last byte for the NUL terminator
+  cap := path.length - 1;
   n   := 0;
 
-  // <root>, or the bundled `www/` dir when no doc-root arg was given (matches `make run`); an empty
-  // root would otherwise make the path absolute (`/index.html`, the FS root) → always 404.
   if (root.length == 0) {
     www := "www";
     for (i := 0; i < www.length && n < cap; i += 1) {
@@ -108,7 +85,6 @@ build_path :: func(own path: []char, root: []char, target: []char) -> []char {
     n += 1;
   }
 
-  // <target>: "/" maps to the directory index; any other target is appended verbatim.
   if (streq(target, "/")) {
     idx := "/index.html";
     for (i := 0; i < idx.length && n < cap; i += 1) {
@@ -123,7 +99,7 @@ build_path :: func(own path: []char, root: []char, target: []char) -> []char {
     }
   }
 
-  path[n] = 0; // n <= cap = path.length-1, so the NUL is in range by construction
+  path[n] = 0;
   out     := path[0: n];
   return out;
 }
