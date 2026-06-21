@@ -1,4 +1,4 @@
-#import { router net io str http }
+#import { router net io str http "./paths" }
 
 route :: enum { files, health }
 
@@ -55,7 +55,7 @@ serve_file :: proc(conn: socket, method: []char, target: []char, root: []char) {
   }
 
   path: [3072]char;
-  pathv := build_path(move path, root, target);
+  pathv := paths.build_path(move path, root, target);
 
   io.fopen_read(pathv)(fd:);
   if (!fd) {
@@ -67,39 +67,4 @@ serve_file :: proc(conn: socket, method: []char, target: []char, root: []char) {
   io.read(fd, body)(content:);
   ct := http.mime_by_ext(pathv);
   http.respond(conn, hdr, 200, ct, content, is_get);
-}
-
-build_path :: func(own path: []char, root: []char, target: []char) -> []char {
-  cap := path.length - 1;
-  n   := 0;
-
-  if (root.length == 0) {
-    www := "www";
-    for (i := 0; i < www.length && n < cap; i += 1) {
-      path[n] = www[i];
-      n += 1;
-    }
-  }
-  for (i := 0; i < root.length && n < cap; i += 1) {
-    path[n] = root[i];
-    n += 1;
-  }
-
-  if (streq(target, "/")) {
-    idx := "/index.html";
-    for (i := 0; i < idx.length && n < cap; i += 1) {
-      path[n] = idx[i];
-      n += 1;
-    }
-  }
-  if (!streq(target, "/")) {
-    for (i := 0; i < target.length && n < cap; i += 1) {
-      path[n] = target[i];
-      n += 1;
-    }
-  }
-
-  path[n] = 0;
-  out     := path[0: n];
-  return out;
 }

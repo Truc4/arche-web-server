@@ -2,21 +2,27 @@
 
 [256]TrieNode;
 
-main :: proc() {
+// The listener socket is single-of ambient context, not entity data — a `#file`-private mutable global
+// (read by `serve`, written by `bind`), exactly like arche-rpg's `win`. Not a `[1]Server` singleton pool.
+#file
+srv: socket;
+
+bind :: system {
   os.argv(1)(portstr:);
   port := parse.atoi(portstr);
   if (!port) {
     port = 8000;
   }
-  os.argv(2)(root:);
-
   register();
-
-  net.listen(port)(srv:);
+  net.listen(port)(s:);
+  srv = s;
   fmt.printf("arche-web-server listening on port %d\n", port);
-
-  for (;;) {
-    net.accept(srv)(conn:);
-    handle(conn, root);
-  }
 }
+
+serve :: system {
+  os.argv(2)(root:);
+  net.accept(srv)(conn:);
+  handle(conn, root);
+}
+
+#run seq({ run(bind), forever(run(serve)) })

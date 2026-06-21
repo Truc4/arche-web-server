@@ -27,8 +27,12 @@ make
 ## Test
 
 ```sh
+arche test ./...   # runs every doctest (e.g. the `build_path` examples in src/paths.arche)
 make test          # spawns ./server and exercises it over HTTP (tests/integration/test_http.py)
 ```
+
+Unit-level logic is covered by doctests in the source; `make test` is the external HTTP
+integration that can't be a doctest (it drives the running process over a socket).
 
 ## What it showcases
 
