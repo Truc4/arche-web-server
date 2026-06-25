@@ -1,28 +1,91 @@
-#import { os net fmt parse "./server" }
+#import { os net fmt parse router http "./server" }
 
-[256]TrieNode;
+// io-as-data web server (arche-rpg shape): one `[1]Conn` singleton carries the listening socket + doc root
+// (ambient) and the per-request pipeline columns. Each tick the schedule runs the pipeline once: accept a
+// connection, recv the bytes, parse → route → prepare a response onto the row's columns, send it, close.
+// No procs, no per-request control flow — every stage is a system/each over the pool, data flows in columns.
 
-// The listener socket is single-of ambient context, not entity data — a `#file`-private mutable global
-// (read by `serve`, written by `bind`), exactly like arche-rpg's `win`. Not a `[1]Server` singleton pool.
-#file
-srv: socket;
+route :: enum { not_found, files, health }
 
-bind :: system {
+Conn :: arche {
+  listener     :: socket,     // ambient: the listening socket (set once in boot)
+  root         :: [3072]char, // ambient: doc root from argv
+  sock         :: socket,     // the current connection
+  raw          :: [8192]char, // the received request bytes (NUL-terminated by `recv`)
+  method_start :: int,
+  method_len   :: int,
+  target_start :: int,
+  target_len   :: int,
+  ok           :: int,        // parse result
+  path         :: [3072]char, // the request target, materialized for routing + file lookup
+  out_h        :: int,        // router result (a `route` handler id)
+  cap0_start   :: int,
+  cap0_len     :: int,
+  best         :: int,
+  status       :: int,        // response: status / content-type / body / length / whether to send the body
+  ctype        :: [64]char,
+  body         :: [262144]char,
+  body_len     :: int,
+  send_body    :: int,
+  hdr          :: [1024]char,
+}
+[1]Conn;
+
+Route :: arche { pattern :: [64]char, hid :: int }
+[4]Route;
+
+boot :: system {
   os.argv(1)(portstr:);
   port := parse.atoi(portstr);
   if (!port) {
     port = 8000;
   }
-  register();
+  os.argv(2)(rootstr:);
+  insert(Route { pattern: "/health", hid: route.health })(_:, _:);
+  insert(Route { pattern: "/*", hid: route.files })(_:, _:);
   net.listen(port)(s:);
-  srv = s;
+  insert(Conn {
+    listener: s,
+    root: rootstr,
+    ok: 0,
+    out_h: -1,
+    cap0_start: -1,
+    cap0_len: -1,
+    best: 0,
+    status: 0,
+    body_len: 0,
+    send_body: 0,
+    method_start: 0,
+    method_len: 0,
+    target_start: 0,
+    target_len: 0,
+  })(_:, _:);
   fmt.printf("arche-web-server listening on port %d\n", port);
 }
 
-serve :: system {
-  os.argv(2)(root:);
-  net.accept(srv)(conn:);
-  handle(conn, root);
+// Accept the next connection onto the singleton row (blocks until one arrives).
+accept :: system (query { listener, sock }) {
+  net.accept(listener)(c:);
+  sock = c;
 }
 
-#run seq({ run(bind), forever(run(serve)) })
+// Close the connection so the row is ready for the next tick's accept.
+cleanup :: system (query { sock }) {
+  net.close(move sock)();
+}
+
+#run {
+  seq({
+    boot,
+    forever(seq({
+      accept,
+      recv,
+      http.parse_request_line,
+      materialize,
+      router.resolve,
+      prepare,
+      http.respond,
+      cleanup,
+    })),
+  })
+}
