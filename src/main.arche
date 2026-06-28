@@ -1,39 +1,62 @@
-#import { os net fmt parse router http "./server" }
+#import { os net io str fmt parse router http }
 
-// io-as-data web server (arche-rpg shape): one `[1]Conn` singleton carries the listening socket + doc root
-// (ambient) and the per-request pipeline columns. Each tick the schedule runs the pipeline once: accept a
-// connection, recv the bytes, parse → route → prepare a response onto the row's columns, send it, close.
-// No procs, no per-request control flow — every stage is a system/each over the pool, data flows in columns.
+// io-as-data web server. Pools are tables (database-style), each holding ONE cohesive entity; the stdlib
+// operations define the natural columns, so each per-request table is exactly one operation's column set:
+//   • Server   — [1] config: the listening socket + doc root. Inserted once in boot.
+//   • Conn     — a CREATE-ONCE connection: `accept` inserts a row holding the fresh socket; `cleanup`
+//                deletes it and `@drop(socket)` auto-closes the fd (RAII — no explicit close).
+//   • Request  — [1] the parsed inbound request: received bytes + the request-line spans (`parse_request_line`).
+//   • Target   — [1] the resolved request target + route match: the NUL path + the router result (`router.resolve`).
+//   • Response — [1] the response being built: status, content-type, body, headers (`respond`).
+//   • Route    — the route table: a `pattern → handler id` row per route (config).
+// The [1] per-request tables are reused each tick. A stage queries only the columns it touches; one that
+// spans tables NESTS an `each` (cross-table is explicit nesting — there are no joins). Funcs are pure
+// values and never mutate: every buffer fills by RUNNING an Eff out-slot (`net.recv`/`io.read`/`fmt.sprintf`,
+// `%.*s` copies a length-carried span, `%s` a NUL-terminated literal).
 
 route :: enum { not_found, files, health }
 
-Conn :: arche {
-  listener     :: socket,     // ambient: the listening socket (set once in boot)
-  root         :: [3072]char, // ambient: doc root from argv
-  sock         :: socket,     // the current connection
-  raw          :: [8192]char, // the received request bytes (NUL-terminated by `recv`)
+Server :: arche { listener :: socket, root :: [3072]char }
+[1]Server;
+
+Conn :: arche { sock :: socket }
+[8]Conn;
+
+Request :: arche {
+  raw          :: [8192]char, // received bytes (length in raw_len; NOT NUL-terminated)
+  raw_len      :: int,
   method_start :: int,
   method_len   :: int,
   target_start :: int,
   target_len   :: int,
-  ok           :: int,        // parse result
-  path         :: [3072]char, // the request target, materialized for routing + file lookup
-  out_h        :: int,        // router result (a `route` handler id)
-  cap0_start   :: int,
-  cap0_len     :: int,
-  best         :: int,
-  status       :: int,        // response: status / content-type / body / length / whether to send the body
-  ctype        :: [64]char,
-  body         :: [262144]char,
-  body_len     :: int,
-  send_body    :: int,
-  hdr          :: [1024]char,
+  ok           :: int,
 }
-[1]Conn;
+[1]Request(1);
+
+Target :: arche {
+  path       :: [3072]char, // the request target, materialized NUL-terminated (length in path_len)
+  path_len   :: int,
+  out_h      :: int,        // router result — a `route` handler id
+  cap0_start :: int,
+  cap0_len   :: int,
+  best       :: int,        // router's match-score accumulator
+}
+[1]Target(1);
+
+Response :: arche {
+  status    :: int,
+  ctype     :: [64]char,
+  body      :: [262144]char,
+  body_len  :: int,
+  send_body :: int,
+  hdr       :: [1024]char,
+}
+[1]Response(1);
 
 Route :: arche { pattern :: [64]char, hid :: int }
 [4]Route;
 
+// Open the listening socket + seed config and the route table. Runs once.
 boot :: system {
   os.argv(1)(portstr:);
   port := parse.atoi(portstr);
@@ -41,37 +64,146 @@ boot :: system {
     port = 8000;
   }
   os.argv(2)(rootstr:);
+  net.listen(port)(s:);
+  if (str.strlen(rootstr) == 0) {
+    insert(Server { listener: s, root: "www" })(_:, _:); // default doc root when none on argv
+  }
+  else {
+    insert(Server { listener: s, root: rootstr })(_:, _:);
+  }
   insert(Route { pattern: "/health", hid: route.health })(_:, _:);
   insert(Route { pattern: "/*", hid: route.files })(_:, _:);
-  net.listen(port)(s:);
-  insert(Conn {
-    listener: s,
-    root: rootstr,
-    ok: 0,
-    out_h: -1,
-    cap0_start: -1,
-    cap0_len: -1,
-    best: 0,
-    status: 0,
-    body_len: 0,
-    send_body: 0,
-    method_start: 0,
-    method_len: 0,
-    target_start: 0,
-    target_len: 0,
-  })(_:, _:);
   fmt.printf("arche-web-server listening on port %d\n", port);
 }
 
-// Accept the next connection onto the singleton row (blocks until one arrives).
-accept :: system (query { listener, sock }) {
-  net.accept(listener)(c:);
-  sock = c;
+// Accept the next connection — a fresh CREATE-ONCE socket inserted as a Conn row.
+accept :: system {
+  each (query { listener }) {
+    net.accept(listener)(c:);
+    insert(Conn { sock: c })(_:, _:);
+  };
 }
 
-// Close the connection so the row is ready for the next tick's accept.
-cleanup :: system (query { sock }) {
-  net.close(move sock)();
+// Receive the request bytes into the Request slot's `raw` buffer (length-carried). Nests `sock` (Conn)
+// around the buffer (Request).
+recv :: system {
+  each (query { sock }) {
+    each (query { raw, raw_len }) {
+      net.recv(sock, 8192)(raw, r:);
+      raw_len = r;
+    };
+  };
+}
+
+// Materialize the parsed target SPAN (Request) into a NUL-terminated `path` (Target). `%.*s` copies exactly
+// `target_len` bytes and NUL-terminates — no manual writes. Nests Request around Target.
+materialize :: each (query { raw, target_start, target_len }) {
+  each (query { path, path_len }) {
+    fmt.sprintf(_, "%.*s", target_len, raw[target_start : target_start + target_len])(path, path_len);
+  };
+}
+
+// Reset the router's accumulator on the reused Target slot. `router.resolve` keeps the BEST-scoring match
+// (`if (sc > best)`) and assumes fresh-zero columns; without this, last request's `best`/`out_h` would
+// stick and every path would resolve to the same handler.
+reset_route :: each (query { out_h, best, cap0_start, cap0_len }) {
+  out_h = route.not_found;
+  best = 0;
+  cap0_start = 0;
+  cap0_len = 0;
+}
+
+// Decide the response from the request (Request), route result (Target), and method; fill the Response.
+// Every body/content-type fills via `fmt.sprintf`'s out-slot; a file body via `io.read`'s. Nesting order
+// follows the data: Request (the method/validity) → Target (the route + path) → Response (what we write),
+// with Server's doc `root` nested in the file branch.
+prepare :: each (query { raw, method_start, method_len, ok }) {
+  is_get  := span_eq(raw, method_start, method_len, "GET");
+  is_head := span_eq(raw, method_start, method_len, "HEAD");
+  each (query { out_h, path, path_len }) {
+    each (query { status, ctype, body, body_len, send_body }) {
+      if (ok == 0) {
+        status = 400;
+        send_body = 1;
+        fmt.sprintf(_, "Bad Request\n")(body, body_len);
+        fmt.sprintf(_, "text/plain; charset=utf-8")(ctype, _:);
+      }
+      else {
+        if (is_get == 0 && is_head == 0) {
+          status = 405;
+          send_body = 1;
+          fmt.sprintf(_, "Method Not Allowed\n")(body, body_len);
+          fmt.sprintf(_, "text/plain; charset=utf-8")(ctype, _:);
+        }
+        else {
+          if (out_h == route.health) {
+            status = 200;
+            send_body = is_get;
+            fmt.sprintf(_, "ok\n")(body, body_len);
+            fmt.sprintf(_, "text/plain; charset=utf-8")(ctype, _:);
+          }
+          else {
+            if (str.contains(path[0 : path_len], "..")) {
+              status = 403;
+              send_body = 1;
+              fmt.sprintf(_, "Forbidden\n")(body, body_len);
+              fmt.sprintf(_, "text/plain; charset=utf-8")(ctype, _:);
+            }
+            else {
+              each (query { root }) {
+                filepath: [3072]char;
+                if (path_len == 1) {
+                  fmt.sprintf(_, "%s/index.html", root)(filepath, _:); // "/" → the directory index
+                }
+                else {
+                  fmt.sprintf(_, "%s%s", root, path)(filepath, _:);
+                }
+                io.fopen_read(filepath)(fd:);
+                if (!fd) {
+                  status = 404;
+                  send_body = is_get;
+                  fmt.sprintf(_, "Not Found\n")(body, body_len);
+                  fmt.sprintf(_, "text/plain; charset=utf-8")(ctype, _:);
+                }
+                else {
+                  io.read(fd, 262144)(body, k:);
+                  status = 200;
+                  body_len = i32(k);
+                  send_body = is_get; // GET sends the body; HEAD reports Content-Length only
+                  fmt.sprintf(_, "%s", http.mime_by_ext(filepath))(ctype, _:);
+                  io.close(move fd)(_:);
+                }
+              };
+            }
+          }
+        }
+      }
+    };
+  };
+}
+
+// Close the connection: delete the Conn row — `@drop(socket)` fires on delete and closes the fd.
+cleanup :: each (query { sock } as w) {
+  delete(w)(_:);
+}
+
+#file
+
+// Compare the span raw[start : start+len] to a NUL-terminated literal. A pure read — funcs never mutate.
+span_eq :: func(raw: []char, start: int, len: int, lit: []char) -> int {
+  if (str.strlen(lit) != len) {
+    return 0;
+  }
+  for (i := 0; i < len; i = i + 1) {
+    k := start + i;
+    if (k < 0 || k >= raw.length || i >= lit.length) {
+      return 0;
+    }
+    if (raw[k] != lit[i]) {
+      return 0;
+    }
+  }
+  return 1;
 }
 
 #run {
@@ -82,6 +214,7 @@ cleanup :: system (query { sock }) {
       recv,
       http.parse_request_line,
       materialize,
+      reset_route,
       router.resolve,
       prepare,
       http.respond,
