@@ -17,10 +17,10 @@
 route :: enum { not_found, files, health }
 
 Server :: arche { listener :: socket, root :: [3072]char }
-[1]Server;
+[1]Server ?abort;
 
 Conn :: arche { sock :: socket }
-[8]Conn;
+[8]Conn ?abort;
 
 Request :: arche {
   raw          :: [8192]char, // received bytes (length in raw_len; NOT NUL-terminated)
@@ -54,7 +54,7 @@ Response :: arche {
 [1]Response(1);
 
 Route :: arche { pattern :: [64]char, hid :: int }
-[4]Route;
+[4]Route ?abort;
 
 // Open the listening socket + seed config and the route table. Runs once.
 boot :: system {
@@ -66,13 +66,13 @@ boot :: system {
   os.argv(2)(rootstr:);
   net.listen(port)(s:);
   if (str.strlen(rootstr) == 0) {
-    insert(Server { listener: s, root: "www" })(_:, _:); // default doc root when none on argv
+    insert(Server { listener: s, root: "www" }); // default doc root when none on argv
   }
   else {
-    insert(Server { listener: s, root: rootstr })(_:, _:);
+    insert(Server { listener: s, root: rootstr });
   }
-  insert(Route { pattern: "/health", hid: route.health })(_:, _:);
-  insert(Route { pattern: "/*", hid: route.files })(_:, _:);
+  insert(Route { pattern: "/health", hid: route.health });
+  insert(Route { pattern: "/*", hid: route.files });
   fmt.printf("arche-web-server listening on port %d\n", port);
 }
 
@@ -80,7 +80,7 @@ boot :: system {
 accept :: system {
   each (query { listener }) {
     net.accept(listener)(c:);
-    insert(Conn { sock: c })(_:, _:);
+    insert(Conn { sock: c });
   };
 }
 
@@ -184,7 +184,7 @@ prepare :: each (query { raw, method_start, method_len, ok }) {
 
 // Close the connection: delete the Conn row — `@drop(socket)` fires on delete and closes the fd.
 cleanup :: each (query { sock } as w) {
-  delete(w)(_:);
+  delete(w);
 }
 
 #file
